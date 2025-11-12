@@ -173,7 +173,7 @@ def plot_feature_importance(
 
 def compare_models_metrics(
     metrics_list: List[Dict[str, Any]],
-    metrics_to_compare: List[str] = ['mse', 'rmse', 'mae', 'r2', 'rmsle'],
+    metrics_to_compare: List[str] = ['cv_mse_mean', 'cv_rmse_mean', 'cv_mae_mean', 'cv_r2_mean', 'cv_rmsle_mean'],
     figsize: Tuple[int, int] = (10, 6)
 ) -> pd.DataFrame:
     """
@@ -195,24 +195,40 @@ def compare_models_metrics(
     return metrics_df
 
 
-def compare_after_add(new_df: pd.DataFrame, 
+from typing import List, Tuple
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
+def compare_after_add(new_df: pd.DataFrame,  
                       base_df: pd.DataFrame, 
                       title: str, 
                       figsize: Tuple[int, int] = (10, 6),
+                      metrics_to_compare: List[str] = ['cv_mse_mean', 'cv_rmse_mean', 'cv_mae_mean', 'cv_r2_mean', 'cv_rmsle_mean'],
                       normalize: bool = True) -> pd.DataFrame:
     """
     Сравнивает метрики моделей относительно предыдущих результатов
+    (только по указанным метрикам)
     """
+    # фильтруем только нужные столбцы
+    new_df = new_df[['model'] + [m for m in metrics_to_compare if m in new_df.columns]]
+    base_df = base_df[['model'] + [m for m in metrics_to_compare if m in base_df.columns]]
+
+    # разница по выбранным метрикам
     df_diff = new_df.set_index('model') - base_df.set_index('model')
     
+    # нормализация (если нужно)
     if normalize:
         df_diff_norm = (df_diff - df_diff.mean()) / df_diff.std()
     else:
         df_diff_norm = df_diff
     
+    # цветовая схема
     colors = ["Green", "White", "Red"]
     cmap = LinearSegmentedColormap.from_list("gwr", colors)
     
+    # тепловая карта
     plt.figure(figsize=figsize)
     sns.heatmap(df_diff_norm, annot=df_diff, fmt='.3f',
                 cmap=cmap, cbar=True, center=0)
@@ -220,3 +236,4 @@ def compare_after_add(new_df: pd.DataFrame,
     plt.tight_layout()
     
     return df_diff
+

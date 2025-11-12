@@ -20,34 +20,35 @@ from sklearn.impute import SimpleImputer
 from eval_utils import evaluate_and_report
 
 def get_baseline_preprocessing(
-    df: pd.DataFrame,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
     numerical_features: List[str],
     binary_features: List[str],
     ordinal_features: List[str],
     nominal_features: List[str]
 ) -> Tuple[np.ndarray, np.ndarray, pd.Series, pd.Series]:
-    """Базовый препроцессинг с time-based split и FrequencyEncoder"""
+    """
+    Универсальный препроцессинг - принимает УЖЕ разделенные данные
+    Не создает признаки, только трансформирует существующие
+    """
     
-    X = df.drop(['Premium_Amount','Policy_Start_Date'], axis=1, errors='ignore')
-    y = np.log1p(df['Premium_Amount'])
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
     preprocessor = ColumnTransformer(transformers=[
-    ('num', Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ]), numerical_features),
-    
-    ('bin_ord', Pipeline([
-        ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-        ('encoder', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1))
-    ]), binary_features + ordinal_features),
-    
-    ('nom', Pipeline([
-        ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-        ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=True))
-    ]), nominal_features)
+        ('num', Pipeline([
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ]), numerical_features),
+        
+        ('bin_ord', Pipeline([
+            ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+            ('encoder', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1))
+        ]), binary_features + ordinal_features),
+        
+        ('nom', Pipeline([
+            ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+            ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=True))
+        ]), nominal_features)
     ], remainder='drop')
 
     X_train_proc = preprocessor.fit_transform(X_train)
@@ -55,20 +56,118 @@ def get_baseline_preprocessing(
 
     return X_train_proc, X_test_proc, y_train, y_test
 
+# def evaluate_model(
+#     model: Any,
+#     X_train: np.ndarray,
+#     X_test: np.ndarray,
+#     y_train: pd.Series,
+#     y_test: pd.Series,
+#     model_name: str
+# ) -> Dict[str, Any]:
+#     """Обучает модель и возвращает метрики"""
+    
+#     model.fit(X_train, y_train)
+#     y_pred_log = model.predict(X_test)
+
+#     return evaluate_and_report(y_true_log=y_test, y_pred_log=y_pred_log, model_name=model_name)
+
+import numpy as np
+import pandas as pd
+from typing import Any, Dict, List, Optional, Union
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, make_scorer
+from sklearn.model_selection import cross_validate
+
+def rmsle_on_log_target(y_true_log, y_pred_log):
+    """RMSLE напрямую на log-трансформированном таргете"""
+    return -np.sqrt(mean_squared_error(y_true_log, y_pred_log))
+
+def mse_on_original_scale(y_true_log, y_pred_log):
+    """MSE на оригинальной шкале (после expm1)"""
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(y_pred_log)
+    return -mean_squared_error(y_true, y_pred)
+
+def rmse_on_original_scale(y_true_log, y_pred_log):
+    """RMSE на оригинальной шкале (после expm1)"""
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(y_pred_log)
+    return -np.sqrt(mean_squared_error(y_true, y_pred))
+
+def mae_on_original_scale(y_true_log, y_pred_log):
+    """MAE на оригинальной шкале (после expm1)"""
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(y_pred_log)
+    return -mean_absolute_error(y_true, y_pred)
+
+def r2_on_original_scale(y_true_log, y_pred_log):
+    """R2 на оригинальной шкале (после expm1)"""
+    y_true = np.expm1(y_true_log)
+    y_pred = np.expm1(y_pred_log)
+    return r2_score(y_true, y_pred)
+
+# Создаем scorers
+scorers = {
+    'rmsle': make_scorer(rmsle_on_log_target, greater_is_better=True),
+    'mse': make_scorer(mse_on_original_scale, greater_is_better=True),
+    'rmse': make_scorer(rmse_on_original_scale, greater_is_better=True),
+    'mae': make_scorer(mae_on_original_scale, greater_is_better=True),
+    'r2': make_scorer(r2_on_original_scale, greater_is_better=True)
+}
+
 def evaluate_model(
     model: Any,
     X_train: np.ndarray,
     X_test: np.ndarray,
     y_train: pd.Series,
     y_test: pd.Series,
-    model_name: str
+    model_name: str,
+    use_cv: bool = True,
+    cv_folds: int = 5
 ) -> Dict[str, Any]:
-    """Обучает модель и возвращает метрики"""
+    """Обучает модель и возвращает метрики с опциональной кросс-валидацией"""
     
+    # Обучаем на полном train
     model.fit(X_train, y_train)
     y_pred_log = model.predict(X_test)
-
-    return evaluate_and_report(y_true_log=y_test, y_pred_log=y_pred_log, model_name=model_name)
+    
+    # Базовые метрики на test set через твою функцию
+    test_metrics = evaluate_and_report(
+        y_true_log=y_test, 
+        y_pred_log=y_pred_log, 
+        model_name=model_name
+    )
+    
+    # Добавляем кросс-валидацию
+    if use_cv:
+        print(f"\n{model_name} - Кросс-валидация ({cv_folds} folds)...")
+        
+        cv_results = cross_validate(
+            model, 
+            X_train, 
+            y_train,
+            cv=cv_folds,
+            scoring=scorers,
+            return_train_score=False,
+            n_jobs=-1
+        )
+        
+        # Добавляем CV метрики
+        test_metrics['cv_mse_mean'] = -cv_results['test_mse'].mean()
+        test_metrics['cv_mse_std'] = cv_results['test_mse'].std()
+        test_metrics['cv_rmse_mean'] = -cv_results['test_rmse'].mean()
+        test_metrics['cv_rmse_std'] = cv_results['test_rmse'].std()
+        test_metrics['cv_mae_mean'] = -cv_results['test_mae'].mean()
+        test_metrics['cv_mae_std'] = cv_results['test_mae'].std()
+        test_metrics['cv_r2_mean'] = cv_results['test_r2'].mean()
+        test_metrics['cv_r2_std'] = cv_results['test_r2'].std()
+        test_metrics['cv_rmsle_mean'] = -cv_results['test_rmsle'].mean()
+        test_metrics['cv_rmsle_std'] = cv_results['test_rmsle'].std()
+        
+        print(f"CV MSE: {test_metrics['cv_mse_mean']:.4f} (+/- {test_metrics['cv_mse_std']:.4f})")
+        print(f"CV RMSE: {test_metrics['cv_rmse_mean']:.4f} (+/- {test_metrics['cv_rmse_std']:.4f})")
+        print(f"CV RMSLE: {test_metrics['cv_rmsle_mean']:.4f} (+/- {test_metrics['cv_rmsle_std']:.4f})")
+    
+    return test_metrics
 
 
 def get_baseline_models() -> Dict[str, Any]:
